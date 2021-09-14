@@ -1,0 +1,302 @@
+#include "AudioSampleSnare.h"     
+#include <Audio.h>
+#include <Wire.h>
+#include <SPI.h>
+#include <SD.h>
+#include <SerialFlash.h>
+#include <Bounce.h>
+AudioPlaySdWav           playSdWav2;     //deck2 object
+AudioPlaySdWav           playSdWav1;     //deck1 object
+AudioPlayMemory          playMem1;      //metronome 
+AudioMixer4              mixer2;       
+AudioMixer4              mixer1;         
+AudioOutputI2S           i2s1;        
+AudioConnection          patchCord1(playSdWav2, 0, mixer1, 2);
+AudioConnection          patchCord2(playSdWav2, 1, mixer2, 2);
+AudioConnection          patchCord3(playSdWav1, 0, mixer1, 1);
+AudioConnection          patchCord4(playSdWav1, 1, mixer2, 1);
+AudioConnection          patchCord5(playMem1, 0, mixer1, 0);
+AudioConnection          patchCord6(playMem1, 0, mixer2, 0);
+AudioConnection          patchCord7(mixer2, 0, i2s1, 1);
+AudioConnection          patchCord8(mixer1, 0, i2s1, 0);
+AudioControlSGTL5000     sgtl5000_1;     
+#define SDCARD_CS_PIN    10
+#define SDCARD_MOSI_PIN  11
+#define SDCARD_SCK_PIN   13
+Bounce globalPlay = Bounce(0, 15);   //global play button starts both decks and tells each one to retrigger on the appropriate barcounts based on barstate & bpm
+Bounce skipButton1 = Bounce(1, 15);  //rest of buttons simply seek through samples on each 'deck'
+Bounce rewButton1 = Bounce(2, 15);  
+Bounce skipButton2 = Bounce(4, 15);  
+Bounce rewButton2 = Bounce(5, 15);   
+Bounce globalStop = Bounce(6, 15); 
+int filenumber = 0; 
+int filenumber1 = 0;
+int barsCounter = 0;
+int millisBPM = 0; 
+int bpm = 90;  //just so the first time it isn't counting at mach3
+int barState;
+int barState1;
+elapsedMillis blinkTime;
+bool quarterState = false;  //every 4 beats it should retrigger
+bool halfState = false;     //every 8 beats
+bool wholeState = false;    //every 16 beats
+bool doubleState = false;   //ever 32 beats
+bool didPlay = false;
+   const char * filelist[4] = {
+  "9001.WAV", "800003.WAV", "800001.WAV", "800003.WAV"                //mostly drum beats varying from 1 bar to even up to 8 bars or 64 beats
+  };   
+  const char * filelist1[4] = {
+  "80000014.WAV", "7500002.WAV", "80000006.WAV", "80000008.WAV"       //anything else, and usually at least 4 bars or 16beats, but up to 64 as well, bpm's from 60 up to 180
+  }; 
+const char *filename = filelist[filenumber];
+const char *filename1 = filelist1[filenumber1];
+
+
+String fileString = (filename);         /////////arduous process of changing '8001.RAW' to simply the int 8001 so it can be converted to barState and BPM
+String fileString1 = (filename1);
+int dotFile = fileString.lastIndexOf('.');
+int dotFile1 = fileString1.lastIndexOf('.');
+String newString = fileString.substring(0, dotFile);
+String newString1 = fileString1.substring(0, dotFile1);
+int newFile = newString.toInt();  
+int newFile1 = newString1.toInt(); 
+
+void setup() {
+  Serial.begin(9600);
+  AudioMemory(60);
+  sgtl5000_1.enable();
+  sgtl5000_1.volume(0.5);
+  SPI.setMOSI(SDCARD_MOSI_PIN);
+  SPI.setSCK(SDCARD_SCK_PIN);
+  if (!(SD.begin(SDCARD_CS_PIN))) {
+    while (1) {
+      Serial.println("Unable to access the SD card");
+      delay(500);
+    }
+  }
+  
+  
+  pinMode(0, INPUT_PULLUP);
+  pinMode(1, INPUT_PULLUP);
+  pinMode(2, INPUT_PULLUP);
+  pinMode(4, INPUT_PULLUP);
+  pinMode(5, INPUT_PULLUP);
+  pinMode(6, INPUT_PULLUP);
+  
+  mixer1.gain(0, 0.3);
+  mixer1.gain(1, 0.3);
+  mixer1.gain(2, 0.3);
+  mixer2.gain(0, 0.3);
+  mixer2.gain(1, 0.3);
+  mixer2.gain(2, 0.3);
+  
+}
+
+
+void loop() 
+{
+
+if ((newFile) <= 9999) {                                                        ////////////////determines each deck's sample BPM as well as which barState to program the retriggering schedules
+      bpm = (newFile)/100;
+      barState = 1;
+    } else if ((newFile) > 9999 && (newFile) <= 99999) {
+      bpm = (newFile)/1000;
+      barState = 2;
+    }  else if ((newFile) > 99999 && (newFile) <= 999999) {
+      bpm = (newFile)/10000;
+      barState = 3;
+    }  else if ((newFile) > 999999 && (newFile) <= 9999999) {
+      bpm = (newFile)/100000;
+      barState = 4;
+    }
+if ((newFile1) <= 9999) {
+      barState1 = 1;
+    } else if ((newFile1) > 9999 && (newFile1) <= 99999) {
+      barState1 = 2;
+    }  else if ((newFile1) > 99999 && (newFile1) <= 999999) {
+      barState1 = 3;
+    }  else if ((newFile1) > 999999 && (newFile1) <= 9999999) {
+      barState1 = 4;
+    }
+    
+millisBPM = 60000/bpm;
+if (blinkTime > millisBPM)
+      {                                                                                                        //////////////////BAR COUNTER///////////
+        barsCounter ++;  
+        blinkTime = 0;
+        didPlay = false;
+        quarterState = false;
+        halfState = false;
+        wholeState = false;
+        doubleState = false;
+        Serial.println(barsCounter);
+    if (barsCounter >= 64)
+      {                                                                                                       
+        barsCounter = 0;
+      }
+   }
+  
+if (barsCounter == 0 && !didPlay){                                                                                           ///////////////////CLICK////////////////////
+    Serial.println(bpm);   
+    doubleState = true;
+    wholeState = true;
+    halfState = true;
+    quarterState = true;
+    didPlay = true; 
+  } else if (barsCounter == 4 && !didPlay){                                          
+    quarterState = true;
+    didPlay = true; 
+  } else if (barsCounter == 8 && !didPlay){
+    Serial.println(bpm);
+    halfState = true;
+    quarterState = true;
+    didPlay = true;      
+  } else if (barsCounter == 12 && !didPlay){
+    quarterState = true;
+    didPlay = true;      
+  } else if (barsCounter == 16 && !didPlay){
+    Serial.println(bpm);
+    wholeState = true;
+    halfState = true;
+    quarterState = true;
+    didPlay = true;  
+  } else if(barsCounter == 20 && !didPlay){
+    quarterState = true;
+    didPlay = true;      
+  } else if (barsCounter == 24 && !didPlay){
+    halfState = true;
+    quarterState = true;
+    didPlay = true;     
+  } else if (barsCounter == 28 && !didPlay){
+    quarterState = true;
+    didPlay = true;    
+  } else if (barsCounter == 32 && !didPlay){ 
+    Serial.println(bpm);
+    doubleState = true;
+    wholeState = true;
+    halfState = true;
+    quarterState = true;
+    didPlay = true; 
+  } else if(barsCounter == 36 && !didPlay){
+    quarterState = true;
+    didPlay = true;    
+  } else if (barsCounter == 40 && !didPlay){
+    halfState = true;
+    quarterState = true;
+    didPlay = true;      
+  } else if (barsCounter == 44 && !didPlay){
+    quarterState = true;
+    didPlay = true;     
+  } else if (barsCounter == 48 && !didPlay){
+    Serial.println(bpm);
+    wholeState = true;
+    halfState = true;
+    quarterState = true;
+    didPlay = true;
+  } else if(barsCounter == 52 && !didPlay){
+    quarterState = true;
+    didPlay = true;      
+  } else if (barsCounter == 56 && !didPlay){
+    halfState = true;
+    quarterState = true;
+    didPlay = true;     
+  } else if (barsCounter == 60 && !didPlay){
+    quarterState = true;
+    didPlay = true;  
+  } else if (barsCounter == 64 && !didPlay){ 
+    Serial.println(bpm);
+    doubleState = true;
+    wholeState = true;
+    halfState = true;
+    quarterState = true;
+    didPlay = true; 
+    }
+      
+skipButton1.update();                                                               //////BUTTONS BABY
+skipButton2.update();
+rewButton1.update();
+rewButton2.update();
+globalPlay.update();
+globalStop.update();
+
+  do {                                                                        ////HOW CAN I DO A SWITCH CASE THAT OCCURS WITHIN A DO-WHILE LOOP, WHEN 2 SEPARATE OBJECTS NEED TO UNDERGO 2 SEPARATE SWITCH CASE PROCESSES?
+    switch (barState) {
+      case 1:
+          if (quarterState == true) {
+            playSdWav1.play(filename);
+          }
+        break;
+      case 2:
+          if (halfState == true) {
+            playSdWav1.play(filename);
+          }
+        break;
+      case 3:
+          if (wholeState == true) {
+            playSdWav1.play(filename);          
+          }
+        break;
+      case 4:
+          if (doubleState == true) {
+            playSdWav1.play(filename);
+          }
+        break;
+      default:
+          playSdWav1.play(filename);
+        break;   
+                    }
+       switch (barState1) {
+      case 1:
+          if (quarterState == true) {
+            playSdWav2.play(filename1);
+          }
+        break;
+      case 2:
+          if (halfState == true) {
+            playSdWav2.play(filename1);
+          }
+        break;
+      case 3:
+          if (wholeState == true) {
+            playSdWav2.play(filename1);          
+          }
+        break;
+      case 4:
+          if (doubleState == true) {
+            playSdWav2.play(filename1);
+          }
+        break;
+      default:
+          playSdWav2.play(filename1);
+        break;   
+                    }
+  } while (globalPlay.fallingEdge());           //////////////when global play is pressed, samples will be played every 4, 8, 16, or 32 beats depending on which barstate the filename is in
+ 
+  if (skipButton1.fallingEdge()) {
+    filenumber = filenumber + 1;
+    if (filenumber >= 3) filenumber = 0;
+    Serial.println("Next Track Deck1");
+  }
+  if (rewButton1.fallingEdge()) {
+    filenumber = filenumber - 1;
+    if (filenumber < 0) filenumber = filenumber + 4;
+    Serial.println("Rewind Track Deck1");
+  }
+  if (skipButton2.fallingEdge()) {
+    filenumber1 = filenumber1 + 1;
+    if (filenumber1 >= 3) filenumber1 = 0;
+    Serial.println("Next Track Deck2");
+  }
+  if (rewButton2.fallingEdge()) {
+    filenumber1 = filenumber1 - 1;
+    if (filenumber1 < 0) filenumber1 = filenumber1 + 4;
+    Serial.println("Rewind Track Deck2");
+  }  
+  if (globalStop.fallingEdge()) {
+     playSdWav1.stop();
+     playSdWav2.stop();
+     barsCounter = 0;
+     Serial.print("Stopped file");
+     delay(5);
+  }
+}
