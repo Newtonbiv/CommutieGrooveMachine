@@ -1,0 +1,2 @@
+# CommutieGrooveMachine
+Imagine having 2 flashdrives, each having thousands of audio sounds roughly 4 beats long to a variety of tempos. Much like having 2 cdj's and a mixer (basic dj setup), I want to be able to play a sound from each device in sync with eachother and scroll through the sounds, even do much more complex stuff later but for now simply hit play on two sources and have them play in sync (when they are the same bpm of course) - oh yeah and all this done from one enclosure and controllable on your steering wheel in the car
